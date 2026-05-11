@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>四角形のしきつめシミュレーター</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #f8fafc; touch-action: none; overflow: hidden; font-family: sans-serif; }
+        canvas { background-color: white; border-radius: 12px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); cursor: crosshair; }
+        .controls { user-select: none; }
+    </style>
+</head>
+<body class="flex flex-col h-screen p-4 overflow-hidden">
+    <!-- Header -->
+    <div class="bg-white border rounded-xl p-4 mb-4 shadow-sm flex flex-wrap items-center justify-between gap-4">
+        <div class="flex items-center gap-4">
+            <h1 class="text-xl font-bold text-slate-800 flex items-center gap-2">
+                <span class="text-orange-500">■</span> 四角形のしきつめ（手動）
+            </h1>
+            <div class="flex bg-slate-100 p-1 rounded-lg border">
+                <button id="mode-edit-btn" class="px-4 py-1.5 rounded-md text-sm font-bold bg-white shadow-sm text-orange-600 transition-all">形をかえる</button>
+                <button id="mode-tile-btn" class="px-4 py-1.5 rounded-md text-sm font-bold text-slate-500 transition-all">ならべる</button>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-2">
+            <label class="flex items-center gap-2 mr-4 cursor-pointer">
+                <input type="checkbox" id="show-symbols-check" checked class="w-4 h-4 rounded text-orange-600">
+                <span class="text-sm font-bold text-slate-700">角のしるし</span>
+            </label>
+            <button id="add-btn" class="bg-orange-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-700 shadow-sm flex items-center gap-1">
+                <span>＋</span> 四角形をふやす
+            </button>
+            <button id="add-flipped-btn" class="bg-amber-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-amber-700 shadow-sm flex items-center gap-1">
+                <span>⇄</span> うらがえし
+            </button>
+            <button id="reset-btn" class="bg-slate-200 text-slate-600 px-4 py-2 rounded-lg font-bold hover:bg-slate-300 ml-2">リセット</button>
+        </div>
+    </div>
+
+    <!-- Main View -->
+    <div class="flex-1 relative bg-white rounded-xl shadow-inner border overflow-hidden">
+        <canvas id="canvas" class="w-full h-full touch-none"></canvas>
+
+        <!-- Legend -->
+        <div id="legend" class="absolute bottom-6 right-6 bg-white/90 backdrop-blur p-3 rounded-xl border shadow-sm flex flex-col gap-2">
+            <div class="flex items-center gap-2 text-xs font-bold text-slate-700">
+                <div class="w-3 h-3 rounded-full border-2 border-red-500"></div> 角A (〇)
+            </div>
+            <div class="flex items-center gap-2 text-xs font-bold text-slate-700">
+                <div class="w-3 h-3 border-2 border-green-500"></div> 角B (□)
+            </div>
+            <div class="flex items-center gap-2 text-xs font-bold text-slate-700">
+                <div class="w-3 h-3 border-2 border-blue-500 rotate-45" style="clip-path: polygon(50% 0%, 0% 100%, 100% 100%);"></div> 角C (△)
+            </div>
+            <div class="flex items-center gap-2 text-xs font-bold text-slate-700">
+                <div class="w-3 h-3 border-2 border-orange-500" style="clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);"></div> 角D (☆)
+            </div>
+        </div>
+
+        <!-- Float Menu (contextual) -->
+        <div id="float-menu" class="absolute hidden bg-white border shadow-xl rounded-full p-1 flex gap-1 items-center">
+            <button id="menu-flip" class="p-2 hover:bg-slate-100 rounded-full text-slate-600" title="うらがえす">⇄</button>
+            <div class="w-px h-6 bg-slate-200 mx-1"></div>
+            <button id="menu-del" class="p-2 hover:bg-red-50 rounded-full text-red-500" title="けす">🗑️</button>
+            <button id="menu-ok" class="p-2 hover:bg-green-50 rounded-full text-green-600" title="確定">✓</button>
+        </div>
+
+        <!-- Message -->
+        <div class="absolute bottom-6 left-6 max-w-sm pointer-events-none bg-white/80 p-4 rounded-2xl border shadow-sm text-sm text-slate-600" id="info-msg">
+            頂点をドラッグして四角形の形を決めましょう。
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const floatMenu = document.getElementById('float-menu');
+        const infoMsg = document.getElementById('info-msg');
+
+        // State
+        let mode = 'edit';
+        let showSymbols = true;
+        let template = [
+            { x: -50, y: -50 },
+            { x: -70, y: 50 },
+            { x: 70, y: 50 },
+            { x: 50, y: -50 }
+        ];
+        let quadrilaterals = [
+            { id: Date.now(), x: 300, y: 250, rotation: 0, isFlipped: false }
+        ];
+        let selectedId = quadrilaterals[0].id;
+        let dragState = null;
+
+        // Resize
+        function resize() {
+            canvas.width = canvas.offsetWidth;
+            canvas.height = canvas.offsetHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Symbols
+        function drawSymbol(x, y, angle, type) {
+            if (!showSymbols) return;
+            const size = 14;
+            const dist = 32;
+            const sx = x + Math.cos(angle) * dist;
+            const sy = y + Math.sin(angle) * dist;
+            ctx.save();
+            ctx.translate(sx, sy);
+            ctx.lineWidth = 2;
+            
+            if (type === 0) { // Circle
+                ctx.strokeStyle = '#ef4444'; ctx.beginPath(); ctx.arc(0, 0, size/2, 0, Math.PI * 2); ctx.stroke();
+            } else if (type === 1) { // Square
+                ctx.strokeStyle = '#22c55e'; ctx.strokeRect(-size/2, -size/2, size, size);
+            } else if (type === 2) { // Triangle
+                ctx.strokeStyle = '#3b82f6'; ctx.beginPath(); ctx.moveTo(0, -size/2); ctx.lineTo(size/2, size/2); ctx.lineTo(-size/2, size/2); ctx.closePath(); ctx.stroke();
+            } else if (type === 3) { // Star
+                ctx.strokeStyle = '#f59e0b';
+                ctx.beginPath();
+                for(let i=0; i<10; i++) {
+                    const r = (i % 2 === 0) ? size/2 : size/4;
+                    const a = (Math.PI * 2 / 10) * i - Math.PI/2;
+                    ctx.lineTo(Math.cos(a)*r, Math.sin(a)*r);
+                }
+                ctx.closePath(); ctx.stroke();
+            }
+            ctx.restore();
+        }
+
+        function getGlobalPoints(quad) {
+            return template.map(p => {
+                let px = p.x;
+                let py = quad.isFlipped ? -p.y : p.y;
+                const cos = Math.cos(quad.rotation);
+                const sin = Math.sin(quad.rotation);
+                return { 
+                    x: (px * cos - py * sin) + quad.x, 
+                    y: (px * sin + py * cos) + quad.y 
+                };
+            });
+        }
+
+        function render() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Grid
+            ctx.strokeStyle = '#f8fafc'; ctx.lineWidth = 1;
+            for(let i=0; i<canvas.width; i+=50) { ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i,canvas.height); ctx.stroke(); }
+            for(let i=0; i<canvas.height; i+=50) { ctx.beginPath(); ctx.moveTo(0,i); ctx.lineTo(canvas.width,i); ctx.stroke(); }
+
+            quadrilaterals.forEach(quad => {
+                const pts = getGlobalPoints(quad);
+                const isSelected = quad.id === selectedId;
+
+                ctx.beginPath();
+                ctx.moveTo(pts[0].x, pts[0].y);
+                for(let i=1; i<4; i++) ctx.lineTo(pts[i].x, pts[i].y);
+                ctx.closePath();
+                ctx.strokeStyle = isSelected ? '#f59e0b' : '#94a3b8';
+                ctx.lineWidth = isSelected ? 3 : 1.5;
+                ctx.stroke();
+                ctx.fillStyle = quad.isFlipped ? '#fffbeb' : '#ffffff';
+                ctx.fill();
+
+                pts.forEach((p, i) => {
+                    const next = pts[(i+1)%4];
+                    const prev = pts[(i+3)%4];
+                    const a1 = Math.atan2(prev.y - p.y, prev.x - p.x);
+                    const a2 = Math.atan2(next.y - p.y, next.x - p.x);
+                    let mid = (a1 + a2) / 2;
+                    if (Math.abs(a1 - a2) > Math.PI) mid += Math.PI;
+                    
+                    let type = i;
+                    if (quad.isFlipped) {
+                        // Flip logic for 4 points
+                        if (i === 1) type = 3; else if (i === 3) type = 1;
+                    }
+                    drawSymbol(p.x, p.y, mid, type);
+                });
+
+                if (isSelected && mode === 'tile') {
+                    const hDist = 80;
+                    const hx = quad.x + Math.cos(quad.rotation - Math.PI/2) * hDist;
+                    const hy = quad.y + Math.sin(quad.rotation - Math.PI/2) * hDist;
+                    ctx.beginPath(); ctx.moveTo(quad.x, quad.y); ctx.lineTo(hx, hy);
+                    ctx.setLineDash([3,3]); ctx.strokeStyle = '#f59e0b'; ctx.stroke(); ctx.setLineDash([]);
+                    ctx.beginPath(); ctx.arc(hx, hy, 10, 0, Math.PI*2); ctx.fillStyle = 'white'; ctx.fill(); ctx.stroke();
+                }
+            });
+
+            if (mode === 'edit' && quadrilaterals.length > 0) {
+                const pts = getGlobalPoints(quadrilaterals[0]);
+                pts.forEach((p, i) => {
+                    ctx.beginPath(); ctx.arc(p.x, p.y, 10, 0, Math.PI*2);
+                    ctx.fillStyle = ['#ef4444', '#22c55e', '#3b82f6', '#f59e0b'][i]; ctx.fill();
+                    ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.stroke();
+                });
+            }
+
+            // Menu Position
+            if (selectedId && mode === 'tile') {
+                const quad = quadrilaterals.find(q => q.id === selectedId);
+                floatMenu.style.display = 'flex';
+                floatMenu.style.left = `${quad.x}px`;
+                floatMenu.style.top = `${quad.y + 110}px`;
+                floatMenu.style.transform = 'translateX(-50%)';
+            } else {
+                floatMenu.style.display = 'none';
+            }
+        }
+
+        // Mouse Events
+        canvas.addEventListener('mousedown', e => {
+            const x = e.offsetX, y = e.offsetY;
+            if (mode === 'edit') {
+                const pts = getGlobalPoints(quadrilaterals[0]);
+                for(let i=0; i<4; i++) {
+                    if (Math.hypot(pts[i].x - x, pts[i].y - y) < 20) { dragState = { type: 'v', idx: i }; return; }
+                }
+            }
+            if (selectedId && mode === 'tile') {
+                const quad = quadrilaterals.find(q => q.id === selectedId);
+                const hx = quad.x + Math.cos(quad.rotation - Math.PI/2) * 80;
+                const hy = quad.y + Math.sin(quad.rotation - Math.PI/2) * 80;
+                if (Math.hypot(hx-x, hy-y) < 20) { dragState = { type: 'r', id: selectedId }; return; }
+            }
+            for(let i=quadrilaterals.length-1; i>=0; i--) {
+                const t = quadrilaterals[i];
+                if (Math.hypot(t.x-x, t.y-y) < 60) {
+                    selectedId = t.id; dragState = { type: 'm', id: t.id, ox: t.x-x, oy: t.y-y };
+                    render(); return;
+                }
+            }
+            selectedId = null; render();
+        });
+
+        window.addEventListener('mousemove', e => {
+            if (!dragState) return;
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left, y = e.clientY - rect.top;
+
+            if (dragState.type === 'm') {
+                const t = quadrilaterals.find(t => t.id === dragState.id);
+                t.x = x + dragState.ox; t.y = y + dragState.oy;
+            } else if (dragState.type === 'r') {
+                const t = quadrilaterals.find(t => t.id === dragState.id);
+                t.rotation = Math.atan2(y-t.y, x-t.x) + Math.PI/2;
+            } else if (dragState.type === 'v') {
+                const t = quadrilaterals[0];
+                const cos = Math.cos(-t.rotation), sin = Math.sin(-t.rotation);
+                const dx = x - t.x, dy = y - t.y;
+                const rx = dx * cos - dy * sin;
+                const ry = dx * sin + dy * cos;
+                template[dragState.idx] = { x: rx, y: t.isFlipped ? -ry : ry };
+            }
+            render();
+        });
+
+        window.addEventListener('mouseup', () => { dragState = null; });
+
+        // Touch support
+        canvas.addEventListener('touchstart', e => {
+            e.preventDefault();
+            const touch = e.touches[0];
+            const rect = canvas.getBoundingClientRect();
+            const mouseEvent = new MouseEvent("mousedown", {
+                clientX: touch.clientX,
+                clientY: touch.clientY
+            });
+            canvas.dispatchEvent(mouseEvent);
+        }, {passive: false});
+
+        // UI Buttons
+        document.getElementById('mode-edit-btn').onclick = () => {
+            mode = 'edit'; infoMsg.innerText = "頂点をドラッグして四角形の形を決めましょう。";
+            document.getElementById('mode-edit-btn').classList.add('bg-white', 'shadow-sm', 'text-orange-600');
+            document.getElementById('mode-edit-btn').classList.remove('text-slate-500');
+            document.getElementById('mode-tile-btn').classList.remove('bg-white', 'shadow-sm', 'text-orange-600');
+            document.getElementById('mode-tile-btn').classList.add('text-slate-500');
+            render();
+        };
+        document.getElementById('mode-tile-btn').onclick = () => {
+            mode = 'tile'; infoMsg.innerText = "四角形をドラッグして移動、上のハンドルで回転できます。4つの角をあわせてみましょう。";
+            document.getElementById('mode-tile-btn').classList.add('bg-white', 'shadow-sm', 'text-orange-600');
+            document.getElementById('mode-tile-btn').classList.remove('text-slate-500');
+            document.getElementById('mode-edit-btn').classList.remove('bg-white', 'shadow-sm', 'text-orange-600');
+            document.getElementById('mode-edit-btn').classList.add('text-slate-500');
+            render();
+        };
+        document.getElementById('show-symbols-check').onchange = e => { showSymbols = e.target.checked; render(); };
+        
+        function add(flip) {
+            const id = Date.now();
+            quadrilaterals.push({ id, x: 400 + (flip?20:0), y: 300 + (flip?20:0), rotation: flip?Math.PI:0, isFlipped: flip });
+            selectedId = id; 
+            if(mode === 'edit') document.getElementById('mode-tile-btn').click();
+            render();
+        }
+        document.getElementById('add-btn').onclick = () => add(false);
+        document.getElementById('add-flipped-btn').onclick = () => add(true);
+        document.getElementById('reset-btn').onclick = () => location.reload();
+
+        document.getElementById('menu-flip').onclick = () => {
+            const t = quadrilaterals.find(t => t.id === selectedId);
+            if(t) t.isFlipped = !t.isFlipped; render();
+        };
+        document.getElementById('menu-del').onclick = () => {
+            if(quadrilaterals.length > 1) {
+                quadrilaterals = quadrilaterals.filter(t => t.id !== selectedId);
+                selectedId = null; render();
+            }
+        };
+        document.getElementById('menu-ok').onclick = () => { selectedId = null; render(); };
+
+        render();
+    </script>
+</body>
+</html>
